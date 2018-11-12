@@ -19,9 +19,8 @@ DOWN = 3
 
 # Rewards
 STEP_REWARD = -1
-FOOD_REWARD = 100
-WIN_REWARD = 1000
-DEATH_REWARD = -1000
+FOOD_REWARD = 50
+DEATH_REWARD = -100
 
 
 def _opposite_dir(dir):
@@ -77,6 +76,9 @@ class SnakeEnv(gym.Env):
         return self._observation()
 
     def step(self, action):
+        if type(action) is np.ndarray:
+            action = action.item(0)
+
         # Error handling
         if self._game_over():
             raise ResetNeeded()
@@ -107,7 +109,7 @@ class SnakeEnv(gym.Env):
         # Check food
         if (x, y) == self.food:
             if self._game_over():
-                return self._observation(), WIN_REWARD, True, None
+                return self._observation(), FOOD_REWARD, True, None
             self._generate_food()
             return self._observation(), FOOD_REWARD, False, None
 
