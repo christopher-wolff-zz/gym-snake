@@ -4,8 +4,9 @@ from collections import deque
 from enum import IntEnum
 
 import gym
-from gym import error, spaces, utils
 from gym.envs.classic_control import rendering
+from gym.error import InvalidAction, ResetNeeded
+from gym.spaces import Box, Discrete
 from gym.utils import seeding
 import numpy as np
 
@@ -18,9 +19,17 @@ DOWN = 3
 
 # Rewards
 STEP_REWARD = -1
-FOOD_REWARD = 50
+FOOD_REWARD = 100
 WIN_REWARD = 1000
 DEATH_REWARD = -1000
+
+
+def _opposite_dir(dir):
+    if dir == LEFT: return RIGHT
+    if dir == UP: return DOWN
+    if dir == RIGHT: return LEFT
+    if dir == DOWN: return UP
+    return None
 
 
 class _Snake:
@@ -34,15 +43,12 @@ class SnakeEnv(gym.Env):
     """A Gym environment implementing a clone of the Snake game."""
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, width=20, height=10):
+    def __init__(self, width=5, height=5):
         assert width >= 1 and height >= 1, f'Invalid size: ({width}, {height})'
 
         self.width = width
         self.height = height
         self.num_cells = width * height
-
-        self.action_space = spaces.Discrete(4)
-        self.observation_space = None  # TODO
 
         self.snake = None
         self.food = None
@@ -51,6 +57,14 @@ class SnakeEnv(gym.Env):
 
         self.seed()
         self.reset()
+
+    @property
+    def action_space(self):
+        return Discrete(4)
+
+    @property
+    def observation_space(self):
+        return Box(low=0, high=1, shape=(self.width, self.height, 3))
 
     def seed(self, seed=None):
         self.rng, seed = seeding.np_random(seed)
@@ -63,12 +77,16 @@ class SnakeEnv(gym.Env):
         return self._observation()
 
     def step(self, action):
+        # Error handling
+        if self._game_over():
+            raise ResetNeeded()
+
         if action not in [LEFT, UP, RIGHT, DOWN]:
-            raise error.InvalidAction(action)
+            raise InvalidAction(action)
 
         # Compute new position
         dir = action
-        if self._opposite_dir(action) == self.snake.dir:
+        if _opposite_dir(action) == self.snake.dir:
             dir = self.snake.dir
 
         v = {LEFT: (-1, 0), UP: (0, 1), RIGHT: (1, 0), DOWN: (0, -1)}
@@ -77,8 +95,8 @@ class SnakeEnv(gym.Env):
         x += dx
         y += dy
 
-        # Check bounds
-        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+        # Check for collisions
+        if x < 0 or x >= self.width or y < 0 or y >= self.height or (x, y) in self.snake.body:
             return self._observation(), DEATH_REWARD, True, None
 
         # Update snake
@@ -88,7 +106,7 @@ class SnakeEnv(gym.Env):
 
         # Check food
         if (x, y) == self.food:
-            if self._won():
+            if self._game_over():
                 return self._observation(), WIN_REWARD, True, None
             self._generate_food()
             return self._observation(), FOOD_REWARD, False, None
@@ -96,14 +114,34 @@ class SnakeEnv(gym.Env):
         self.snake.body.pop()
         return self._observation(), STEP_REWARD, False, None
 
-
     def _observation(self):
-        """Get the agent's observation vector.
+        """Generate the observation for the current state.
+
+        We represent each observation as an array of size width * height * 3
+        as follows.
+            1st layer: multi-hot encoding of the snake's body
+            2nd layer: one-hot encoding of the snake head's position
+            3rd layer: one-hot encoding of the food position
 
         """
-        return 0
+        # snake body
+        snake_layer = np.zeros((self.width, self.height))
+        for x, y in self.snake.body:
+            snake_layer[x, y] = 1
 
-    def _won(self):
+        # snake head position
+        head_layer = np.zeros((self.width, self.height))
+        snake_x, snake_y = self.snake.pos
+        head_layer[snake_x, snake_y] = 1
+
+        # food position
+        food_layer = np.zeros((self.width, self.height))
+        food_x, food_y = self.food
+        food_layer[food_x, food_y] = 1
+
+        return np.stack((snake_layer, head_layer, food_layer), axis=2).astype(np.uint8)
+
+    def _game_over(self):
         """Check if the player won."""
         return len(self.snake.body) >= self.num_cells
 
@@ -119,18 +157,10 @@ class SnakeEnv(gym.Env):
         empty_cells = list(all_cells - full_cells)
 
         if len(empty_cells) == 0:
-            raise error.ResetNeeded('No space to generate food.')
+            raise ResetNeeded('No space to generate food.')
 
         random_index = self.rng.randint(len(empty_cells))
         self.food = empty_cells[random_index]
-
-    @staticmethod
-    def _opposite_dir(dir):
-        if dir == LEFT: return RIGHT
-        if dir == UP: return DOWN
-        if dir == RIGHT: return LEFT
-        if dir == DOWN: return UP
-        return None
 
     def render(self, mode='human', close=False):
         SCALE = 20
